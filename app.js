@@ -43,6 +43,7 @@
     view: "home",
     practiceIds: questions.map((q) => q.id),
     practiceIndex: 0,
+    practiceScope: "all",
     selected: null,
     revealed: false,
     answers: savedAnswers,
@@ -171,7 +172,7 @@
           <h2 class="question-title">${escapeHtml(q.question)}</h2>
           <div class="option-list">${options}</div>
           ${state.revealed ? `<div class="explanation"><h3>解析</h3><div class="correct-answer">正确答案：${q.answer}（${escapeHtml(q.options[q.answer])}）</div><p>${escapeHtml(q.explanation)}</p><details class="source-details"><summary>查看依据来源</summary><span>${q.explanationOrigin} · ${source.url ? `<a href="${source.url}" target="_blank" rel="noreferrer">${escapeHtml(source.title)} ↗</a>` : escapeHtml(source.title)}${q.standardWarning ? `<br>${escapeHtml(q.standardWarning)}` : ""}</span></details></div>` : ""}
-          <div class="question-actions"><button class="ghost-button light-button" data-action="previous-question" ${state.practiceIndex === 0 ? "disabled" : ""}>上一题</button><div class="right">${state.revealed ? `<button class="secondary-button" data-action="toggle-mastered">${state.mastered.has(q.id) ? "已掌握" : "标记掌握"}</button><button class="primary-button" data-action="next-question">${state.practiceIndex === state.practiceIds.length - 1 ? "完成" : "下一题"}</button>` : `<button class="primary-button" data-action="reveal-answer" ${state.selected ? "" : "disabled"}>确认答案</button>`}</div></div>
+          <div class="question-actions"><button class="ghost-button light-button" data-action="previous-question" ${state.practiceIndex === 0 ? "disabled" : ""}>上一题</button><div class="right">${state.revealed ? `<button class="secondary-button" data-action="toggle-mastered">${state.practiceScope === "wrong" ? "已掌握，移出错题" : state.mastered.has(q.id) ? "已掌握" : "标记掌握"}</button><button class="primary-button" data-action="next-question">${state.practiceIndex === state.practiceIds.length - 1 ? "完成" : "下一题"}</button>` : `<button class="primary-button" data-action="reveal-answer" ${state.selected ? "" : "disabled"}>确认答案</button>`}</div></div>
         </article>
         <aside class="practice-side">
           <article class="card side-card"><h3>练习范围</h3><p class="subtle">本组 ${state.practiceIds.length} 题</p><button class="secondary-button full" data-action="open-practice-setup">重新筛选</button></article>
@@ -193,9 +194,10 @@
     </section></div>`;
   }
 
-  function startPractice(ids = questions.map((q) => q.id), startIndex = 0) {
+  function startPractice(ids = questions.map((q) => q.id), startIndex = 0, scope = "all") {
     state.practiceIds = ids;
     state.practiceIndex = Math.max(0, Math.min(startIndex, ids.length - 1));
+    state.practiceScope = scope;
     state.selected = null;
     state.revealed = false;
     closeModal();
@@ -405,7 +407,7 @@
     if (scope === "wrong") ids = ids.filter((id) => state.wrong.has(id));
     if (scope === "favorites") ids = ids.filter((id) => state.favorites.has(id));
     if (order === "random") ids = shuffle(ids);
-    startPractice(ids);
+    startPractice(ids, 0, scope);
   }
 
   document.addEventListener("click", (event) => {
@@ -434,9 +436,23 @@
     if (action === "previous-question") { state.practiceIndex = Math.max(0, state.practiceIndex - 1); state.selected = null; state.revealed = false; renderPractice(); }
     if (target.dataset.jump !== undefined) { state.practiceIndex = Number(target.dataset.jump); state.selected = null; state.revealed = false; renderPractice(); }
     if (action === "toggle-favorite") { const q = currentPractice(); state.favorites.has(q.id) ? state.favorites.delete(q.id) : state.favorites.add(q.id); save(); renderPractice(); showToast(state.favorites.has(q.id) ? "已收藏" : "已取消收藏"); }
-    if (action === "toggle-mastered") { const q = currentPractice(); state.mastered.has(q.id) ? state.mastered.delete(q.id) : state.mastered.add(q.id); save(); renderPractice(); }
-    if (action === "review-wrong") startPractice([...state.wrong]);
-    if (action === "review-favorites") startPractice([...state.favorites]);
+    if (action === "toggle-mastered") {
+      const q = currentPractice();
+      if (state.practiceScope === "wrong") {
+        state.mastered.add(q.id);
+        state.wrong.delete(q.id);
+        state.practiceIds = state.practiceIds.filter((id) => id !== q.id);
+        state.practiceIndex = Math.min(state.practiceIndex, Math.max(0, state.practiceIds.length - 1));
+        state.selected = null;
+        state.revealed = false;
+        save(); renderPractice(); showToast("已掌握，已移出错题");
+      } else {
+        state.mastered.has(q.id) ? state.mastered.delete(q.id) : state.mastered.add(q.id);
+        save(); renderPractice();
+      }
+    }
+    if (action === "review-wrong") startPractice([...state.wrong], 0, "wrong");
+    if (action === "review-favorites") startPractice([...state.favorites], 0, "favorites");
     if (action === "open-exam") openExamModal();
     if (action === "start-exam-confirm") startExam(readExamCount("examChoiceCount"), readExamCount("examJudgmentCount"), Number(document.querySelector("#examMinutes").value), { wrongFirst: document.querySelector("#examWrongFirst").checked, unseenFirst: document.querySelector("#examUnseenFirst").checked });
     if (target.dataset.examAnswer) { const q = currentExam(); state.exam.answers[q.id] = target.dataset.examAnswer; renderExam(); }
@@ -445,12 +461,12 @@
     if (target.dataset.examJump !== undefined) { state.exam.index = Number(target.dataset.examJump); renderExam(); }
     if (action === "confirm-submit-exam") confirmSubmitExam();
     if (action === "submit-exam") submitExam(false);
-    if (action === "review-current-exam-wrong") startPractice(state.exam.results.filter((r) => !r.correct).map((r) => r.id));
+    if (action === "review-current-exam-wrong") startPractice(state.exam.results.filter((r) => !r.correct).map((r) => r.id), 0, "wrong");
     if (target.dataset.reviewId) openQuestionExplanation(target.dataset.reviewId);
     if (action === "open-bank" || action === "open-search") renderBank();
     if (action === "bank-search") { state.bank.query = document.querySelector("#bankSearch").value; state.bank.topic = document.querySelector("#bankTopic").value; state.bank.type = document.querySelector("#bankType").value; state.bank.page = 1; renderBank(); }
     if (target.dataset.bankPage) { state.bank.page = Number(target.dataset.bankPage); renderBank(); window.scrollTo({ top: 0, behavior: "smooth" }); }
-    if (target.dataset.bankId) { const filtered = filteredBank().map((q) => q.id); startPractice(filtered, filtered.indexOf(Number(target.dataset.bankId))); }
+    if (target.dataset.bankId) { const filtered = filteredBank().map((q) => q.id); startPractice(filtered, filtered.indexOf(Number(target.dataset.bankId)), "bank"); }
     if (action === "open-sources") openSources();
     if (action === "close-modal") closeModal();
   });

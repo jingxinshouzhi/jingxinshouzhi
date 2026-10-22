@@ -36,6 +36,9 @@
     try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
   };
   const savedAnswers = readJson("gasExamAnswers", {});
+  const savedStudied = readJson("gasExamStudied", Object.keys(savedAnswers).map(Number));
+  const savedWrong = readJson("gasExamWrong", []);
+  const knownSeenIds = [...new Set([...savedStudied, ...savedWrong, ...Object.keys(savedAnswers).map(Number)])];
   const state = {
     view: "home",
     practiceIds: questions.map((q) => q.id),
@@ -43,9 +46,10 @@
     selected: null,
     revealed: false,
     answers: savedAnswers,
-    studied: new Set(readJson("gasExamStudied", Object.keys(savedAnswers).map(Number))),
+    studied: new Set(savedStudied),
+    seen: new Set(readJson("gasExamSeen", knownSeenIds)),
     mastered: new Set(readJson("gasExamMastered", [])),
-    wrong: new Set(readJson("gasExamWrong", [])),
+    wrong: new Set(savedWrong),
     favorites: new Set(readJson("gasExamFavorites", [])),
     history: readJson("gasExamHistory", []),
     bank: { query: "", topic: "全部", type: "全部", page: 1 },
@@ -66,6 +70,7 @@
   function save() {
     localStorage.setItem("gasExamAnswers", JSON.stringify(state.answers));
     localStorage.setItem("gasExamStudied", JSON.stringify([...state.studied]));
+    localStorage.setItem("gasExamSeen", JSON.stringify([...state.seen]));
     localStorage.setItem("gasExamMastered", JSON.stringify([...state.mastered]));
     localStorage.setItem("gasExamWrong", JSON.stringify([...state.wrong]));
     localStorage.setItem("gasExamFavorites", JSON.stringify([...state.favorites]));
@@ -200,11 +205,16 @@
 
   function openExamModal() {
     modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="examSetupTitle">
-      <div class="modal-head"><div><p class="eyebrow">模拟考试</p><h2 id="examSetupTitle">设置试卷</h2><p class="subtle">分别设置两种题型的数量，题目将随机抽取并混合排列。</p></div><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div>
+      <div class="modal-head"><div><p class="eyebrow">模拟考试</p><h2 id="examSetupTitle">设置试卷</h2><p class="subtle">分别设置两种题型的数量，还可以按学习情况优先选题。</p></div><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div>
       <div class="form-grid two-columns">
         <div class="filter-row"><label for="examChoiceCount">单选题数量（最多 ${examPools.choice.length} 道）</label><input id="examChoiceCount" type="number" min="0" max="${examPools.choice.length}" step="1" value="80" inputmode="numeric"></div>
         <div class="filter-row"><label for="examJudgmentCount">判断题数量（最多 ${examPools.judgment.length} 道）</label><input id="examJudgmentCount" type="number" min="0" max="${examPools.judgment.length}" step="1" value="20" inputmode="numeric"></div>
         <div class="filter-row exam-duration"><label for="examMinutes">考试时长</label><select id="examMinutes"><option value="30">30分钟</option><option value="60" selected>60分钟</option><option value="90">90分钟</option><option value="120">120分钟</option></select></div>
+        <fieldset class="exam-priority-options">
+          <legend>选题偏好（可多选）</legend>
+          <label class="check-card" for="examWrongFirst"><input id="examWrongFirst" type="checkbox"><span><strong>错题优先</strong><small>优先抽取当前错题（${state.wrong.size} 道）</small></span></label>
+          <label class="check-card" for="examUnseenFirst"><input id="examUnseenFirst" type="checkbox"><span><strong>未做题优先</strong><small>优先抽取尚未做过的题（${questions.filter((q) => !state.seen.has(q.id)).length} 道）</small></span></label>
+        </fieldset>
         <p class="exam-count-summary" id="examCountSummary" aria-live="polite">本次共 100 道题：80 道单选题 + 20 道判断题</p>
       </div>
       <button class="primary-button full" data-action="start-exam-confirm">开始考试</button>
@@ -232,16 +242,37 @@
     const judgmentCount = readExamCount("examJudgmentCount");
     const error = validateExamSettings(choiceCount, judgmentCount);
     summary.classList.toggle("error", Boolean(error));
-    summary.textContent = error || `本次共 ${choiceCount + judgmentCount} 道题：${choiceCount} 道单选题 + ${judgmentCount} 道判断题`;
+    const preferences = [];
+    if (document.querySelector("#examWrongFirst")?.checked) preferences.push("错题优先");
+    if (document.querySelector("#examUnseenFirst")?.checked) preferences.push("未做题优先");
+    summary.textContent = error || `本次共 ${choiceCount + judgmentCount} 道题：${choiceCount} 道单选题 + ${judgmentCount} 道判断题${preferences.length ? ` · ${preferences.join("、")}` : " · 随机选题"}`;
   }
 
-  function startExam(choiceCount, judgmentCount, minutes) {
+  function selectExamIds(pool, count, { wrongFirst = false, unseenFirst = false } = {}) {
+    const selected = [];
+    const selectedIds = new Set();
+    const addFrom = (items) => {
+      shuffle(items).forEach((q) => {
+        if (selected.length < count && !selectedIds.has(q.id)) {
+          selected.push(q.id);
+          selectedIds.add(q.id);
+        }
+      });
+    };
+    if (wrongFirst) addFrom(pool.filter((q) => state.wrong.has(q.id)));
+    if (unseenFirst) addFrom(pool.filter((q) => !state.seen.has(q.id)));
+    addFrom(pool);
+    return selected;
+  }
+
+  function startExam(choiceCount, judgmentCount, minutes, preferences = {}) {
     const error = validateExamSettings(choiceCount, judgmentCount);
     if (error) { showToast(error); return false; }
     clearInterval(state.timer);
-    const choiceIds = shuffle(examPools.choice).slice(0, choiceCount).map((q) => q.id);
-    const judgmentIds = shuffle(examPools.judgment).slice(0, judgmentCount).map((q) => q.id);
-    state.exam = { ids: shuffle([...choiceIds, ...judgmentIds]), choiceCount, judgmentCount, index: 0, answers: {}, startedAt: Date.now(), durationSeconds: minutes * 60, submitted: false };
+    const { wrongFirst = false, unseenFirst = false } = preferences;
+    const choiceIds = selectExamIds(examPools.choice, choiceCount, { wrongFirst, unseenFirst });
+    const judgmentIds = selectExamIds(examPools.judgment, judgmentCount, { wrongFirst, unseenFirst });
+    state.exam = { ids: shuffle([...choiceIds, ...judgmentIds]), choiceCount, judgmentCount, wrongFirst, unseenFirst, index: 0, answers: {}, startedAt: Date.now(), durationSeconds: minutes * 60, submitted: false };
     closeModal();
     renderExam();
     state.timer = setInterval(updateExamTimer, 1000);
@@ -268,7 +299,7 @@
     const answered = Object.keys(state.exam.answers).length;
     const options = Object.entries(q.options).map(([key, text]) => `<button class="option ${selected === key ? "selected" : ""}" data-exam-answer="${key}"><span class="option-key">${key}</span><span>${escapeHtml(text)}</span></button>`).join("");
     root.innerHTML = `
-      <div class="exam-topbar"><div><p class="eyebrow">模拟考试</p><h1>随机试卷</h1><p class="subtle">单选 ${state.exam.choiceCount} · 判断 ${state.exam.judgmentCount}</p></div><div class="exam-status"><span>已答 ${answered}/${state.exam.ids.length}</span><strong id="examTimer">${formatDuration(remainingExamSeconds())}</strong><button class="danger-button" data-action="confirm-submit-exam">交卷</button></div></div>
+      <div class="exam-topbar"><div><p class="eyebrow">模拟考试</p><h1>随机试卷</h1><p class="subtle">单选 ${state.exam.choiceCount} · 判断 ${state.exam.judgmentCount}${state.exam.wrongFirst ? " · 错题优先" : ""}${state.exam.unseenFirst ? " · 未做题优先" : ""}</p></div><div class="exam-status"><span>已答 ${answered}/${state.exam.ids.length}</span><strong id="examTimer">${formatDuration(remainingExamSeconds())}</strong><button class="danger-button" data-action="confirm-submit-exam">交卷</button></div></div>
       <section class="practice-layout">
         <article class="card question-card">
           <div class="question-meta"><div class="tag-row"><span class="tag">${q.type}</span><span class="tag">第 ${state.exam.index + 1} 题</span></div><span>每题 1 分</span></div>
@@ -299,6 +330,7 @@
     const correct = results.filter((r) => r.correct).length;
     const elapsed = Math.min(state.exam.durationSeconds, Math.floor((Date.now() - state.exam.startedAt) / 1000));
     results.forEach((r) => r.correct ? state.wrong.delete(r.id) : state.wrong.add(r.id));
+    results.forEach((r) => state.seen.add(r.id));
     state.exam.results = results;
     state.history.unshift({ at: Date.now(), score: Math.round(correct / results.length * 100), correct, total: results.length, elapsed });
     save(); closeModal(); renderResults(auto);
@@ -390,6 +422,7 @@
       const q = currentPractice(); if (!q || !state.selected) return;
       state.revealed = true;
       state.studied.add(q.id);
+      state.seen.add(q.id);
       state.answers[q.id] = { selected: state.selected, correct: state.selected === q.answer, at: Date.now() };
       state.selected === q.answer ? state.wrong.delete(q.id) : state.wrong.add(q.id);
       save(); renderPractice();
@@ -405,7 +438,7 @@
     if (action === "review-wrong") startPractice([...state.wrong]);
     if (action === "review-favorites") startPractice([...state.favorites]);
     if (action === "open-exam") openExamModal();
-    if (action === "start-exam-confirm") startExam(readExamCount("examChoiceCount"), readExamCount("examJudgmentCount"), Number(document.querySelector("#examMinutes").value));
+    if (action === "start-exam-confirm") startExam(readExamCount("examChoiceCount"), readExamCount("examJudgmentCount"), Number(document.querySelector("#examMinutes").value), { wrongFirst: document.querySelector("#examWrongFirst").checked, unseenFirst: document.querySelector("#examUnseenFirst").checked });
     if (target.dataset.examAnswer) { const q = currentExam(); state.exam.answers[q.id] = target.dataset.examAnswer; renderExam(); }
     if (action === "exam-next") { state.exam.index = Math.min(state.exam.index + 1, state.exam.ids.length - 1); renderExam(); }
     if (action === "exam-previous") { state.exam.index = Math.max(state.exam.index - 1, 0); renderExam(); }
@@ -423,6 +456,7 @@
   });
 
   document.addEventListener("change", (event) => {
+    if (["examWrongFirst", "examUnseenFirst"].includes(event.target.id)) updateExamCountSummary();
     if (["bankTopic", "bankType"].includes(event.target.id)) {
       state.bank.topic = document.querySelector("#bankTopic").value;
       state.bank.type = document.querySelector("#bankType").value;
@@ -451,7 +485,7 @@
     const safeRegister = (tool) => { try { void Promise.resolve(context.registerTool(tool)).catch(() => {}); } catch {} };
     safeRegister({ name: "get_study_progress", title: "查看学习进度", description: "读取当前设备上的已背、答题、掌握、错题和考试进度。", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: () => ({ total: questions.length, studied: state.studied.size, answered: Object.keys(state.answers).length, mastered: state.mastered.size, wrong: state.wrong.size, examCount: state.history.length }) });
     safeRegister({ name: "start_practice_session", title: "开始背题练习", description: "按范围和知识分类打开背题练习。", inputSchema: { type: "object", properties: { scope: { type: "string", enum: ["all", "unanswered", "wrong", "favorites"] }, topic: { type: "string" } }, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ scope = "all", topic = "全部" } = {}) => { selectPracticeGroup(scope, topics.includes(topic) ? topic : "全部", "sequence"); return { started: true, questionCount: state.practiceIds.length, topic }; } });
-    safeRegister({ name: "start_mock_exam", title: "开始模拟考试", description: "按指定的单选题和判断题数量创建并打开一套随机模拟试卷。", inputSchema: { type: "object", properties: { choiceCount: { type: "integer", minimum: 0, maximum: examPools.choice.length }, judgmentCount: { type: "integer", minimum: 0, maximum: examPools.judgment.length }, durationMinutes: { type: "integer", enum: [30, 60, 90, 120] } }, required: ["choiceCount", "judgmentCount", "durationMinutes"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ choiceCount, judgmentCount, durationMinutes }) => { const started = startExam(choiceCount, judgmentCount, durationMinutes); return { started, choiceCount, judgmentCount, questionCount: choiceCount + judgmentCount, durationMinutes }; } });
+    safeRegister({ name: "start_mock_exam", title: "开始模拟考试", description: "按指定的题型数量和选题偏好创建并打开一套模拟试卷。", inputSchema: { type: "object", properties: { choiceCount: { type: "integer", minimum: 0, maximum: examPools.choice.length }, judgmentCount: { type: "integer", minimum: 0, maximum: examPools.judgment.length }, durationMinutes: { type: "integer", enum: [30, 60, 90, 120] }, wrongFirst: { type: "boolean" }, unseenFirst: { type: "boolean" } }, required: ["choiceCount", "judgmentCount", "durationMinutes"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ choiceCount, judgmentCount, durationMinutes, wrongFirst = false, unseenFirst = false }) => { const started = startExam(choiceCount, judgmentCount, durationMinutes, { wrongFirst, unseenFirst }); return { started, choiceCount, judgmentCount, questionCount: choiceCount + judgmentCount, durationMinutes, wrongFirst, unseenFirst }; } });
     safeRegister({ name: "search_question_bank", title: "搜索题库", description: "按关键词搜索题干和选项并打开题库检索结果。", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: ({ query }) => { state.bank.query = String(query).slice(0, 80); state.bank.page = 1; renderBank(); return { matches: filteredBank().length, query: state.bank.query }; } });
   }
 
@@ -459,3 +493,4 @@
   renderHome();
   registerWebMcp();
 })();
+

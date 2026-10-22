@@ -232,7 +232,15 @@ select, input[type="search"], input[type="number"] { width: 100%; min-height: 44
 .favorite-button { border: 0; background: transparent; color: var(--green-700); font-weight: 700; cursor: pointer; }
 .form-grid { display: grid; gap: 14px; margin: 22px 0; }
 .form-grid.two-columns { grid-template-columns: 1fr 1fr; }
-.exam-duration, .exam-count-summary { grid-column: 1 / -1; }
+.exam-duration, .exam-priority-options, .exam-count-summary { grid-column: 1 / -1; }
+.exam-priority-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; padding: 0; border: 0; }
+.exam-priority-options legend { grid-column: 1 / -1; margin-bottom: 7px; color: var(--muted); font-size: .78rem; }
+.check-card { display: flex; align-items: center; gap: 11px; min-height: 62px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; background: white; cursor: pointer; }
+.check-card:has(input:checked) { border-color: var(--green-700); background: var(--green-50); }
+.check-card input { width: 18px; height: 18px; accent-color: var(--green-700); flex: 0 0 auto; }
+.check-card span { display: grid; gap: 3px; }
+.check-card strong { color: var(--ink); font-size: .92rem; }
+.check-card small { color: var(--muted); font-size: .75rem; line-height: 1.35; }
 .exam-count-summary { margin: -2px 0 0; padding: 12px 14px; border-radius: 11px; background: var(--green-50); color: var(--green-800); font-size: .88rem; }
 .exam-count-summary.error { background: #fff1ef; color: var(--danger); }
 .notice { padding: 14px 16px; border-radius: 13px; background: var(--amber-100); color: #5c451b; }
@@ -314,6 +322,7 @@ select, input[type="search"], input[type="number"] { width: 100%; min-height: 44
   .question-actions button { flex: 1; padding-inline: 10px; }
   .choice-grid { grid-template-columns: 1fr; }
   .form-grid.two-columns { grid-template-columns: 1fr; }
+  .exam-priority-options { grid-template-columns: 1fr; }
   .exam-topbar { align-items: flex-start; }
   .exam-status { display: grid; grid-template-columns: auto auto; gap: 6px 10px; text-align: right; }
   .exam-status .danger-button { grid-column: 1 / -1; }
@@ -328,3 +337,4 @@ select, input[type="search"], input[type="number"] { width: 100%; min-height: 44
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+

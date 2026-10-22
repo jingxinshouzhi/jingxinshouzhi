@@ -64,6 +64,13 @@
     for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; }
     return copy;
   };
+  const shuffleDifferent = (items) => {
+    const shuffled = shuffle(items);
+    if (shuffled.length > 1 && shuffled.every((item, index) => item === items[index])) {
+      [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+    }
+    return shuffled;
+  };
   const formatDuration = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(Math.max(0, seconds % 60)).padStart(2, "0")}`;
   const currentPractice = () => byId.get(state.practiceIds[state.practiceIndex]);
   const currentExam = () => state.exam ? byId.get(state.exam.ids[state.exam.index]) : null;
@@ -274,7 +281,13 @@
     const { wrongFirst = false, unseenFirst = false } = preferences;
     const choiceIds = selectExamIds(examPools.choice, choiceCount, { wrongFirst, unseenFirst });
     const judgmentIds = selectExamIds(examPools.judgment, judgmentCount, { wrongFirst, unseenFirst });
-    state.exam = { ids: shuffle([...choiceIds, ...judgmentIds]), choiceCount, judgmentCount, wrongFirst, unseenFirst, index: 0, answers: {}, startedAt: Date.now(), durationSeconds: minutes * 60, submitted: false };
+    const ids = shuffle([...choiceIds, ...judgmentIds]);
+    const optionOrders = Object.fromEntries(ids.map((id) => {
+      const q = byId.get(id);
+      const keys = Object.keys(q.options);
+      return [id, q.type === "单选题" ? shuffleDifferent(keys) : keys];
+    }));
+    state.exam = { ids, optionOrders, choiceCount, judgmentCount, wrongFirst, unseenFirst, index: 0, answers: {}, startedAt: Date.now(), durationSeconds: minutes * 60, submitted: false };
     closeModal();
     renderExam();
     state.timer = setInterval(updateExamTimer, 1000);
@@ -293,13 +306,22 @@
     if (remaining <= 0 && state.exam && !state.exam.submitted) submitExam(true);
   }
 
+  function displayedExamOptions(q) {
+    const order = state.exam?.optionOrders?.[q.id] ?? Object.keys(q.options);
+    return order.map((originalKey, index) => ({
+      originalKey,
+      displayKey: String.fromCharCode(65 + index),
+      text: q.options[originalKey],
+    }));
+  }
+
   function renderExam() {
     if (!state.exam) return openExamModal();
     state.view = "exam";
     const q = currentExam();
     const selected = state.exam.answers[q.id] ?? null;
     const answered = Object.keys(state.exam.answers).length;
-    const options = Object.entries(q.options).map(([key, text]) => `<button class="option ${selected === key ? "selected" : ""}" data-exam-answer="${key}"><span class="option-key">${key}</span><span>${escapeHtml(text)}</span></button>`).join("");
+    const options = displayedExamOptions(q).map(({ originalKey, displayKey, text }) => `<button class="option ${selected === originalKey ? "selected" : ""}" data-exam-answer="${originalKey}"><span class="option-key">${displayKey}</span><span>${escapeHtml(text)}</span></button>`).join("");
     root.innerHTML = `
       <div class="exam-topbar"><div><p class="eyebrow">模拟考试</p><h1>随机试卷</h1><p class="subtle">单选 ${state.exam.choiceCount} · 判断 ${state.exam.judgmentCount}${state.exam.wrongFirst ? " · 错题优先" : ""}${state.exam.unseenFirst ? " · 未做题优先" : ""}</p></div><div class="exam-status"><span>已答 ${answered}/${state.exam.ids.length}</span><strong id="examTimer">${formatDuration(remainingExamSeconds())}</strong><button class="danger-button" data-action="confirm-submit-exam">交卷</button></div></div>
       <section class="practice-layout">
@@ -327,7 +349,18 @@
     clearInterval(state.timer);
     const results = state.exam.ids.map((id) => {
       const q = byId.get(id); const selected = state.exam.answers[id] ?? null;
-      return { id, selected, correct: selected === q.answer };
+      const displayed = displayedExamOptions(q);
+      const selectedOption = displayed.find((option) => option.originalKey === selected);
+      const correctOption = displayed.find((option) => option.originalKey === q.answer);
+      return {
+        id,
+        selected,
+        selectedDisplay: selectedOption?.displayKey ?? null,
+        selectedText: selectedOption?.text ?? null,
+        correctDisplay: correctOption?.displayKey ?? q.answer,
+        correctText: correctOption?.text ?? q.options[q.answer],
+        correct: selected === q.answer,
+      };
     });
     const correct = results.filter((r) => r.correct).length;
     const elapsed = Math.min(state.exam.durationSeconds, Math.floor((Date.now() - state.exam.startedAt) / 1000));
@@ -353,7 +386,7 @@
         <article class="card result-stat"><strong>${formatDuration(state.history[0]?.elapsed ?? 0)}</strong><span>用时</span></article>
       </section>
       <div class="section-title"><h2>答题回顾</h2><div><button class="secondary-button" data-action="review-current-exam-wrong" ${wrongIds.length ? "" : "disabled"}>复习本次错题</button></div></div>
-      <section class="review-list">${results.slice(0, 12).map((r, index) => { const q = byId.get(r.id); return `<article class="card review-row"><span class="result-icon ${r.correct ? "ok" : "bad"}">${r.correct ? "✓" : "×"}</span><div><small>第 ${index + 1} 题 · ${q.topic}</small><h3>${escapeHtml(q.question)}</h3><p>${r.correct ? "回答正确" : `你的答案：${r.selected || "未答"}　正确答案：${q.answer}`}</p></div><button class="text-button" data-review-id="${q.id}">查看解析</button></article>`; }).join("")}</section>
+      <section class="review-list">${results.slice(0, 12).map((r, index) => { const q = byId.get(r.id); return `<article class="card review-row"><span class="result-icon ${r.correct ? "ok" : "bad"}">${r.correct ? "✓" : "×"}</span><div><small>第 ${index + 1} 题 · ${q.topic}</small><h3>${escapeHtml(q.question)}</h3><p>${r.correct ? `回答正确：${r.correctDisplay}（${escapeHtml(r.correctText)}）` : `你的答案：${r.selectedDisplay ? `${r.selectedDisplay}（${escapeHtml(r.selectedText)}）` : "未答"}　正确答案：${r.correctDisplay}（${escapeHtml(r.correctText)}）`}</p></div><button class="text-button" data-review-id="${q.id}">查看解析</button></article>`; }).join("")}</section>
       ${results.length > 12 ? `<p class="subtle center-text">仅展示前 12 题回顾，可进入错题复习查看全部答错题目。</p>` : ""}`;
     setActiveNav("exam");
   }
@@ -396,7 +429,9 @@
     const q = byId.get(Number(id));
     if (!q) return;
     const source = SOURCES[q.sourceKey] ?? SOURCES.questionBank;
-    modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal wide-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><p class="eyebrow">第 ${q.id} 题解析</p><h2>${escapeHtml(q.question)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div><div class="answer-callout">正确答案：${q.answer}（${escapeHtml(q.options[q.answer])}）</div><h3>解析</h3><p>${escapeHtml(q.explanation)}</p><details class="source-details"><summary>查看依据来源</summary><span>${q.explanationOrigin} · ${source.url ? `<a href="${source.url}" target="_blank" rel="noreferrer">${escapeHtml(source.title)} ↗</a>` : escapeHtml(source.title)}${q.standardWarning ? `<br>${escapeHtml(q.standardWarning)}` : ""}</span></details></section></div>`;
+    const examResult = state.view === "results" ? state.exam?.results?.find((result) => result.id === q.id) : null;
+    const answerLabel = examResult?.correctDisplay ?? q.answer;
+    modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal wide-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><p class="eyebrow">第 ${q.id} 题解析</p><h2>${escapeHtml(q.question)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div><div class="answer-callout">正确答案：${answerLabel}（${escapeHtml(q.options[q.answer])}）</div><h3>解析</h3><p>${escapeHtml(q.explanation)}</p><details class="source-details"><summary>查看依据来源</summary><span>${q.explanationOrigin} · ${source.url ? `<a href="${source.url}" target="_blank" rel="noreferrer">${escapeHtml(source.title)} ↗</a>` : escapeHtml(source.title)}${q.standardWarning ? `<br>${escapeHtml(q.standardWarning)}` : ""}</span></details></section></div>`;
   }
 
   function closeModal() { modalRoot.innerHTML = ""; }
@@ -492,7 +527,11 @@
     if (!/^[a-dA-D]$/.test(event.key) || ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) return;
     const key = event.key.toUpperCase();
     if (state.view === "practice" && !state.revealed && currentPractice()?.options[key]) { state.selected = key; renderPractice(); }
-    if (state.view === "exam" && currentExam()?.options[key]) { state.exam.answers[currentExam().id] = key; renderExam(); }
+    if (state.view === "exam") {
+      const q = currentExam();
+      const option = q ? displayedExamOptions(q).find((item) => item.displayKey === key) : null;
+      if (option) { state.exam.answers[q.id] = option.originalKey; renderExam(); }
+    }
   });
 
   function registerWebMcp() {

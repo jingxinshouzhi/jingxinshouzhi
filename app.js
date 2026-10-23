@@ -72,6 +72,7 @@
     return shuffled;
   };
   const formatDuration = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(Math.max(0, seconds % 60)).padStart(2, "0")}`;
+  const formatExamDate = (timestamp) => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(timestamp));
   const currentPractice = () => byId.get(state.practiceIds[state.practiceIndex]);
   const currentExam = () => state.exam ? byId.get(state.exam.ids[state.exam.index]) : null;
 
@@ -111,7 +112,8 @@
     const correct = Object.values(state.answers).filter((item) => item.correct).length;
     const accuracy = answered ? Math.round(correct / answered * 100) : 0;
     const today = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date());
-    const latest = state.history[0];
+    const recentExams = state.history.slice(0, 5);
+    const recentAverage = recentExams.length ? Math.round(recentExams.reduce((sum, exam) => sum + Number(exam.score || 0), 0) / recentExams.length * 10) / 10 : null;
     root.innerHTML = `
       <div class="page-head">
         <div><p class="eyebrow">学习概览</p><h1>把薄弱点一题一题练扎实</h1><p class="subtle">题库共 ${questions.length} 题，学习进度仅保存在当前设备。</p></div>
@@ -147,8 +149,10 @@
         <article class="card stat"><strong>${answered}</strong><span>已作答题目</span></article>
         <article class="card stat"><strong>${accuracy}%</strong><span>练习正确率</span></article>
         <article class="card stat"><strong>${state.wrong.size}</strong><span>当前错题</span></article>
-        <article class="card stat"><strong>${latest ? `${latest.score}分` : "—"}</strong><span>最近考试</span></article>
-      </section>`;
+        <article class="card stat"><strong>${recentAverage === null ? "—" : `${recentAverage}分`}</strong><span>近${recentExams.length || 5}次考试平均分</span></article>
+      </section>
+      <div class="section-title"><h2>模拟考试记录</h2><span class="subtle">最近 5 次</span></div>
+      ${recentExams.length ? `<section class="card exam-history"><div class="exam-history-head"><span>考试时间</span><span>得分</span><span>答对题数</span><span>用时</span></div>${recentExams.map((exam) => `<div class="exam-history-row"><time datetime="${new Date(exam.at).toISOString()}">${formatExamDate(exam.at)}</time><strong>${exam.score}分</strong><span>${exam.correct} / ${exam.total}</span><span>${formatDuration(exam.elapsed || 0)}</span></div>`).join("")}</section>` : `<section class="card exam-history-empty"><p>完成一次模拟考试后，成绩会记录在这里。</p></section>`}`;
     setActiveNav("home");
   }
 
@@ -565,7 +569,7 @@
     const context = document.modelContext;
     if (!context?.registerTool) return;
     const safeRegister = (tool) => { try { void Promise.resolve(context.registerTool(tool)).catch(() => {}); } catch {} };
-    safeRegister({ name: "get_study_progress", title: "查看学习进度", description: "读取当前设备上的已背、答题、掌握、错题和考试进度。", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: () => ({ total: questions.length, studied: state.studied.size, answered: Object.keys(state.answers).length, mastered: state.mastered.size, wrong: state.wrong.size, examCount: state.history.length }) });
+    safeRegister({ name: "get_study_progress", title: "查看学习进度", description: "读取当前设备上的已背、答题、掌握、错题和考试进度。", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: () => { const recent = state.history.slice(0, 5); return { total: questions.length, studied: state.studied.size, answered: Object.keys(state.answers).length, mastered: state.mastered.size, wrong: state.wrong.size, examCount: state.history.length, recentExamScores: recent.map((exam) => exam.score), recentFiveAverage: recent.length ? Math.round(recent.reduce((sum, exam) => sum + Number(exam.score || 0), 0) / recent.length * 10) / 10 : null }; } });
     safeRegister({ name: "start_practice_session", title: "开始背题练习", description: "按范围和知识分类打开背题练习。", inputSchema: { type: "object", properties: { scope: { type: "string", enum: ["all", "unanswered", "wrong", "favorites"] }, topic: { type: "string" } }, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ scope = "all", topic = "全部" } = {}) => { selectPracticeGroup(scope, topics.includes(topic) ? topic : "全部", "sequence"); return { started: true, questionCount: state.practiceIds.length, topic }; } });
     safeRegister({ name: "start_mock_exam", title: "开始模拟考试", description: "按指定的题型数量和选题偏好创建并打开一套模拟试卷。", inputSchema: { type: "object", properties: { choiceCount: { type: "integer", minimum: 0, maximum: examPools.choice.length }, judgmentCount: { type: "integer", minimum: 0, maximum: examPools.judgment.length }, durationMinutes: { type: "integer", enum: [30, 60, 90, 120] }, wrongFirst: { type: "boolean" }, unseenFirst: { type: "boolean" } }, required: ["choiceCount", "judgmentCount", "durationMinutes"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ choiceCount, judgmentCount, durationMinutes, wrongFirst = false, unseenFirst = false }) => { const started = startExam(choiceCount, judgmentCount, durationMinutes, { wrongFirst, unseenFirst }); return { started, choiceCount, judgmentCount, questionCount: choiceCount + judgmentCount, durationMinutes, wrongFirst, unseenFirst }; } });
     safeRegister({ name: "search_question_bank", title: "搜索题库", description: "按关键词搜索题干和选项并打开题库检索结果。", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: ({ query }) => { state.bank.query = String(query).slice(0, 80); state.bank.page = 1; renderBank(); return { matches: filteredBank().length, query: state.bank.query }; } });

@@ -104,6 +104,9 @@ h1 { margin-bottom: 4px; font-size: clamp(1.75rem, 3vw, 2.5rem); line-height: 1.
 h2 { font-size: 1.35rem; line-height: 1.35; }
 .subtle { color: var(--muted); }
 .date-chip { white-space: nowrap; color: var(--muted); font-size: .9rem; }
+.practice-head-actions { display: flex; align-items: center; gap: 10px; }
+.reset-practice-button { min-height: 38px; border: 1px solid #e2b5b1; border-radius: 11px; padding: 0 13px; background: var(--white); color: var(--danger); font-weight: 700; cursor: pointer; }
+.reset-practice-button:hover { background: #fff5f4; }
 .home-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .85fr); gap: 24px; }
 .card {
   background: var(--white);
@@ -310,6 +313,7 @@ select, input[type="search"], input[type="number"] { width: 100%; min-height: 44
 @media (max-width: 600px) {
   .page-head { align-items: start; }
   .date-chip { display: none; }
+  .practice-head-actions { flex-shrink: 0; }
   .hero-card { min-height: 0; padding: 26px 22px; }
   .hero-actions { display: grid; grid-template-columns: 1fr; }
   .stats-strip { grid-template-columns: 1fr 1fr; }

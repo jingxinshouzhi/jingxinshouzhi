@@ -38,6 +38,7 @@
   const savedAnswers = readJson("gasExamAnswers", {});
   const savedStudied = readJson("gasExamStudied", Object.keys(savedAnswers).map(Number));
   const savedWrong = readJson("gasExamWrong", []);
+  const savedWrongCounts = readJson("gasExamWrongCounts", Object.fromEntries(savedWrong.map((id) => [id, 1])));
   const knownSeenIds = [...new Set([...savedStudied, ...savedWrong, ...Object.keys(savedAnswers).map(Number)])];
   const state = {
     view: "home",
@@ -51,6 +52,7 @@
     seen: new Set(readJson("gasExamSeen", knownSeenIds)),
     mastered: new Set(readJson("gasExamMastered", [])),
     wrong: new Set(savedWrong),
+    wrongCounts: savedWrongCounts && typeof savedWrongCounts === "object" ? savedWrongCounts : {},
     favorites: new Set(readJson("gasExamFavorites", [])),
     history: readJson("gasExamHistory", []),
     bank: { query: "", topic: "全部", type: "全部", page: 1 },
@@ -75,6 +77,16 @@
   const formatExamDate = (timestamp) => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(timestamp));
   const currentPractice = () => byId.get(state.practiceIds[state.practiceIndex]);
   const currentExam = () => state.exam ? byId.get(state.exam.ids[state.exam.index]) : null;
+  const wrongCount = (id) => Number(state.wrongCounts[id] || 0);
+
+  function errorProneIds() {
+    return questions.filter((q) => wrongCount(q.id) >= 2 && !state.mastered.has(q.id)).sort((a, b) => wrongCount(b.id) - wrongCount(a.id) || a.id - b.id).map((q) => q.id);
+  }
+
+  function recordWrong(id) {
+    state.wrongCounts[id] = wrongCount(id) + 1;
+    state.mastered.delete(id);
+  }
 
   function save() {
     localStorage.setItem("gasExamAnswers", JSON.stringify(state.answers));
@@ -82,6 +94,7 @@
     localStorage.setItem("gasExamSeen", JSON.stringify([...state.seen]));
     localStorage.setItem("gasExamMastered", JSON.stringify([...state.mastered]));
     localStorage.setItem("gasExamWrong", JSON.stringify([...state.wrong]));
+    localStorage.setItem("gasExamWrongCounts", JSON.stringify(state.wrongCounts));
     localStorage.setItem("gasExamFavorites", JSON.stringify([...state.favorites]));
     localStorage.setItem("gasExamHistory", JSON.stringify(state.history.slice(0, 30)));
     updateProgress();
@@ -114,6 +127,7 @@
     const today = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date());
     const recentExams = state.history.slice(0, 5);
     const recentAverage = recentExams.length ? Math.round(recentExams.reduce((sum, exam) => sum + Number(exam.score || 0), 0) / recentExams.length * 10) / 10 : null;
+    const errorProne = errorProneIds();
     root.innerHTML = `
       <div class="page-head">
         <div><p class="eyebrow">学习概览</p><h1>把薄弱点一题一题练扎实</h1><p class="subtle">题库共 ${questions.length} 题，学习进度仅保存在当前设备。</p></div>
@@ -139,6 +153,7 @@
             <h3>需要回看</h3>
             <div class="quick-list">
               <button class="quick-row" data-action="review-wrong"><span>错题复习<small>集中重做答错题目</small></span><strong>${state.wrong.size}</strong></button>
+              <button class="quick-row" data-action="review-error-prone"><span>易错题<small>累计答错 2 次及以上</small></span><strong>${errorProne.length}</strong></button>
               <button class="quick-row" data-action="review-favorites"><span>我的收藏<small>保留易混与重点题</small></span><strong>${state.favorites.size}</strong></button>
             </div>
           </article>
@@ -151,6 +166,8 @@
         <article class="card stat"><strong>${state.wrong.size}</strong><span>当前错题</span></article>
         <article class="card stat"><strong>${recentAverage === null ? "—" : `${recentAverage}分`}</strong><span>近${recentExams.length || 5}次考试平均分</span></article>
       </section>
+      <div class="section-title"><h2>易错题</h2>${errorProne.length ? `<button class="text-button" data-action="review-error-prone">集中练习</button>` : ""}</div>
+      ${errorProne.length ? `<section class="mistake-list">${errorProne.slice(0, 5).map((id) => { const q = byId.get(id); return `<button class="card mistake-row" data-error-prone-id="${id}"><span class="mistake-count">错 ${wrongCount(id)} 次</span><span><small>${escapeHtml(q.topic)} · 第 ${q.id} 题</small><strong>${escapeHtml(q.question)}</strong></span><i>练习 →</i></button>`; }).join("")}</section>` : `<section class="card exam-history-empty"><p>同一道题累计答错 2 次后，会自动出现在这里。</p></section>`}
       <div class="section-title"><h2>模拟考试记录</h2><span class="subtle">最近 5 次</span></div>
       ${recentExams.length ? `<section class="card exam-history"><div class="exam-history-head"><span>考试时间</span><span>得分</span><span>答对题数</span><span>用时</span></div>${recentExams.map((exam) => `<div class="exam-history-row"><time datetime="${new Date(exam.at).toISOString()}">${formatExamDate(exam.at)}</time><strong>${exam.score}分</strong><span>${exam.correct} / ${exam.total}</span><span>${formatDuration(exam.elapsed || 0)}</span></div>`).join("")}</section>` : `<section class="card exam-history-empty"><p>完成一次模拟考试后，成绩会记录在这里。</p></section>`}`;
     setActiveNav("home");
@@ -164,7 +181,7 @@
       setActiveNav("practice");
       return;
     }
-    const old = state.answers[q.id];
+    const old = ["wrong", "error-prone"].includes(state.practiceScope) ? null : state.answers[q.id];
     state.selected = state.selected ?? old?.selected ?? null;
     state.revealed = state.revealed || Boolean(old);
     const options = Object.entries(q.options).map(([key, text]) => {
@@ -179,11 +196,11 @@
       <div class="page-head"><div><p class="eyebrow">背题模式</p><h1>${escapeHtml(q.topic)}</h1></div><div class="practice-head-actions"><span class="date-chip">${state.practiceIndex + 1} / ${state.practiceIds.length}</span><button class="reset-practice-button" data-action="confirm-reset-practice">清除背题进度</button></div></div>
       <section class="practice-layout">
         <article class="card question-card">
-          <div class="question-meta"><div class="tag-row"><span class="tag">${q.type}</span><span class="tag">${q.topic}</span></div><button class="favorite-button" data-action="toggle-favorite">${state.favorites.has(q.id) ? "★ 已收藏" : "☆ 收藏"}</button></div>
+          <div class="question-meta"><div class="tag-row"><span class="tag">${q.type}</span><span class="tag">${q.topic}</span>${wrongCount(q.id) >= 2 ? `<span class="tag warm">累计错 ${wrongCount(q.id)} 次</span>` : ""}</div><button class="favorite-button" data-action="toggle-favorite">${state.favorites.has(q.id) ? "★ 已收藏" : "☆ 收藏"}</button></div>
           <h2 class="question-title">${escapeHtml(q.question)}</h2>
           <div class="option-list">${options}</div>
           ${state.revealed ? `<div class="explanation"><h3>解析</h3><div class="correct-answer">正确答案：${q.answer}（${escapeHtml(q.options[q.answer])}）</div><p>${escapeHtml(q.explanation)}</p><details class="source-details"><summary>查看依据来源</summary><span>${q.explanationOrigin} · ${source.url ? `<a href="${source.url}" target="_blank" rel="noreferrer">${escapeHtml(source.title)} ↗</a>` : escapeHtml(source.title)}${q.standardWarning ? `<br>${escapeHtml(q.standardWarning)}` : ""}</span></details></div>` : ""}
-          <div class="question-actions"><button class="ghost-button light-button" data-action="previous-question" ${state.practiceIndex === 0 ? "disabled" : ""}>上一题</button><div class="right">${state.revealed ? `<button class="secondary-button" data-action="toggle-mastered">${state.practiceScope === "wrong" ? "已掌握，移出错题" : state.mastered.has(q.id) ? "已掌握" : "标记掌握"}</button><button class="primary-button" data-action="next-question">${state.practiceIndex === state.practiceIds.length - 1 ? "完成" : "下一题"}</button>` : `<button class="primary-button" data-action="reveal-answer" ${state.selected ? "" : "disabled"}>确认答案</button>`}</div></div>
+          <div class="question-actions"><button class="ghost-button light-button" data-action="previous-question" ${state.practiceIndex === 0 ? "disabled" : ""}>上一题</button><div class="right">${state.revealed ? `<button class="secondary-button" data-action="toggle-mastered">${state.practiceScope === "wrong" ? "已掌握，移出错题" : state.practiceScope === "error-prone" ? "已掌握，移出易错题" : state.mastered.has(q.id) ? "已掌握" : "标记掌握"}</button><button class="primary-button" data-action="next-question">${state.practiceIndex === state.practiceIds.length - 1 ? "完成" : "下一题"}</button>` : `<button class="primary-button" data-action="reveal-answer" ${state.selected ? "" : "disabled"}>确认答案</button>`}</div></div>
         </article>
         <aside class="practice-side">
           <article class="card side-card"><h3>练习范围</h3><p class="subtle">本组 ${state.practiceIds.length} 题</p><button class="secondary-button full" data-action="open-practice-setup">重新筛选</button></article>
@@ -197,7 +214,7 @@
     modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="practiceSetupTitle">
       <div class="modal-head"><div><p class="eyebrow">练习设置</p><h2 id="practiceSetupTitle">选择背题范围</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div>
       <div class="form-grid">
-        <div class="filter-row"><label for="practiceScope">题目范围</label><select id="practiceScope"><option value="all">全部题目</option><option value="unanswered">未背题目</option><option value="wrong">错题</option><option value="favorites">收藏题</option></select></div>
+        <div class="filter-row"><label for="practiceScope">题目范围</label><select id="practiceScope"><option value="all">全部题目</option><option value="unanswered">未背题目</option><option value="wrong">错题</option><option value="error-prone">易错题（累计错 2 次及以上）</option><option value="favorites">收藏题</option></select></div>
         <div class="filter-row"><label for="practiceTopic">知识分类</label><select id="practiceTopic"><option value="全部">全部分类</option>${topics.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("")}</select></div>
         <div class="filter-row"><label for="practiceOrder">顺序</label><select id="practiceOrder"><option value="sequence">按题库顺序</option><option value="random">随机顺序</option></select></div>
       </div>
@@ -368,7 +385,13 @@
     });
     const correct = results.filter((r) => r.correct).length;
     const elapsed = Math.min(state.exam.durationSeconds, Math.floor((Date.now() - state.exam.startedAt) / 1000));
-    results.forEach((r) => r.correct ? state.wrong.delete(r.id) : state.wrong.add(r.id));
+    results.forEach((r) => {
+      if (r.correct) state.wrong.delete(r.id);
+      else {
+        state.wrong.add(r.id);
+        if (r.selected !== null) recordWrong(r.id);
+      }
+    });
     results.forEach((r) => state.seen.add(r.id));
     state.exam.results = results;
     state.history.unshift({ at: Date.now(), score: Math.round(correct / results.length * 100), correct, total: results.length, elapsed });
@@ -469,6 +492,7 @@
     let ids = questions.filter((q) => topic === "全部" || q.topic === topic).map((q) => q.id);
     if (scope === "unanswered") ids = ids.filter((id) => !state.studied.has(id));
     if (scope === "wrong") ids = ids.filter((id) => state.wrong.has(id));
+    if (scope === "error-prone") ids = ids.filter((id) => wrongCount(id) >= 2 && !state.mastered.has(id)).sort((a, b) => wrongCount(b) - wrongCount(a) || a - b);
     if (scope === "favorites") ids = ids.filter((id) => state.favorites.has(id));
     if (order === "random") ids = shuffle(ids);
     startPractice(ids, 0, scope);
@@ -492,7 +516,8 @@
       state.studied.add(q.id);
       state.seen.add(q.id);
       state.answers[q.id] = { selected: state.selected, correct: state.selected === q.answer, at: Date.now() };
-      state.selected === q.answer ? state.wrong.delete(q.id) : state.wrong.add(q.id);
+      if (state.selected === q.answer) state.wrong.delete(q.id);
+      else { state.wrong.add(q.id); recordWrong(q.id); }
       save(); renderPractice();
     }
     if (action === "next-question") {
@@ -504,20 +529,23 @@
     if (action === "toggle-favorite") { const q = currentPractice(); state.favorites.has(q.id) ? state.favorites.delete(q.id) : state.favorites.add(q.id); save(); renderPractice(); showToast(state.favorites.has(q.id) ? "已收藏" : "已取消收藏"); }
     if (action === "toggle-mastered") {
       const q = currentPractice();
-      if (state.practiceScope === "wrong") {
+      if (["wrong", "error-prone"].includes(state.practiceScope)) {
         state.mastered.add(q.id);
         state.wrong.delete(q.id);
         state.practiceIds = state.practiceIds.filter((id) => id !== q.id);
         state.practiceIndex = Math.min(state.practiceIndex, Math.max(0, state.practiceIds.length - 1));
         state.selected = null;
         state.revealed = false;
-        save(); renderPractice(); showToast("已掌握，已移出错题");
+        const message = state.practiceScope === "error-prone" ? "已掌握，已移出易错题" : "已掌握，已移出错题";
+        save(); renderPractice(); showToast(message);
       } else {
         state.mastered.has(q.id) ? state.mastered.delete(q.id) : state.mastered.add(q.id);
         save(); renderPractice();
       }
     }
     if (action === "review-wrong") startPractice([...state.wrong], 0, "wrong");
+    if (action === "review-error-prone") startPractice(errorProneIds(), 0, "error-prone");
+    if (target.dataset.errorProneId) { const ids = errorProneIds(); startPractice(ids, Math.max(0, ids.indexOf(Number(target.dataset.errorProneId))), "error-prone"); }
     if (action === "review-favorites") startPractice([...state.favorites], 0, "favorites");
     if (action === "open-exam") openExamModal();
     if (action === "start-exam-confirm") startExam(readExamCount("examChoiceCount"), readExamCount("examJudgmentCount"), Number(document.querySelector("#examMinutes").value), { wrongFirst: document.querySelector("#examWrongFirst").checked, unseenFirst: document.querySelector("#examUnseenFirst").checked });
@@ -569,8 +597,8 @@
     const context = document.modelContext;
     if (!context?.registerTool) return;
     const safeRegister = (tool) => { try { void Promise.resolve(context.registerTool(tool)).catch(() => {}); } catch {} };
-    safeRegister({ name: "get_study_progress", title: "查看学习进度", description: "读取当前设备上的已背、答题、掌握、错题和考试进度。", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: () => { const recent = state.history.slice(0, 5); return { total: questions.length, studied: state.studied.size, answered: Object.keys(state.answers).length, mastered: state.mastered.size, wrong: state.wrong.size, examCount: state.history.length, recentExamScores: recent.map((exam) => exam.score), recentFiveAverage: recent.length ? Math.round(recent.reduce((sum, exam) => sum + Number(exam.score || 0), 0) / recent.length * 10) / 10 : null }; } });
-    safeRegister({ name: "start_practice_session", title: "开始背题练习", description: "按范围和知识分类打开背题练习。", inputSchema: { type: "object", properties: { scope: { type: "string", enum: ["all", "unanswered", "wrong", "favorites"] }, topic: { type: "string" } }, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ scope = "all", topic = "全部" } = {}) => { selectPracticeGroup(scope, topics.includes(topic) ? topic : "全部", "sequence"); return { started: true, questionCount: state.practiceIds.length, topic }; } });
+    safeRegister({ name: "get_study_progress", title: "查看学习进度", description: "读取当前设备上的已背、答题、掌握、错题和考试进度。", inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: () => { const recent = state.history.slice(0, 5); return { total: questions.length, studied: state.studied.size, answered: Object.keys(state.answers).length, mastered: state.mastered.size, wrong: state.wrong.size, errorProne: errorProneIds().length, examCount: state.history.length, recentExamScores: recent.map((exam) => exam.score), recentFiveAverage: recent.length ? Math.round(recent.reduce((sum, exam) => sum + Number(exam.score || 0), 0) / recent.length * 10) / 10 : null }; } });
+    safeRegister({ name: "start_practice_session", title: "开始背题练习", description: "按范围和知识分类打开背题练习。", inputSchema: { type: "object", properties: { scope: { type: "string", enum: ["all", "unanswered", "wrong", "error-prone", "favorites"] }, topic: { type: "string" } }, additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ scope = "all", topic = "全部" } = {}) => { selectPracticeGroup(scope, topics.includes(topic) ? topic : "全部", "sequence"); return { started: true, questionCount: state.practiceIds.length, topic }; } });
     safeRegister({ name: "start_mock_exam", title: "开始模拟考试", description: "按指定的题型数量和选题偏好创建并打开一套模拟试卷。", inputSchema: { type: "object", properties: { choiceCount: { type: "integer", minimum: 0, maximum: examPools.choice.length }, judgmentCount: { type: "integer", minimum: 0, maximum: examPools.judgment.length }, durationMinutes: { type: "integer", enum: [30, 60, 90, 120] }, wrongFirst: { type: "boolean" }, unseenFirst: { type: "boolean" } }, required: ["choiceCount", "judgmentCount", "durationMinutes"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false }, execute: ({ choiceCount, judgmentCount, durationMinutes, wrongFirst = false, unseenFirst = false }) => { const started = startExam(choiceCount, judgmentCount, durationMinutes, { wrongFirst, unseenFirst }); return { started, choiceCount, judgmentCount, questionCount: choiceCount + judgmentCount, durationMinutes, wrongFirst, unseenFirst }; } });
     safeRegister({ name: "search_question_bank", title: "搜索题库", description: "按关键词搜索题干和选项并打开题库检索结果。", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: ({ query }) => { state.bank.query = String(query).slice(0, 80); state.bank.page = 1; renderBank(); return { matches: filteredBank().length, query: state.bank.query }; } });
   }

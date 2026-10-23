@@ -156,7 +156,7 @@
     state.view = "practice";
     const q = currentPractice();
     if (!q) {
-      root.innerHTML = `<div class="card empty"><h2>当前题组没有题目</h2><p>可以从全部题库开始，或先做题积累错题和收藏。</p><div class="hero-actions center"><button class="secondary-button" data-action="start-all-practice">练习全部题目</button><button class="light-button ghost-button" data-view="home">返回首页</button></div></div>`;
+      root.innerHTML = `<div class="card empty"><h2>当前题组没有题目</h2><p>可以从全部题库开始，或先做题积累错题和收藏。</p><div class="hero-actions center"><button class="secondary-button" data-action="start-all-practice">练习全部题目</button><button class="reset-practice-button" data-action="confirm-reset-practice">清除背题进度</button><button class="light-button ghost-button" data-view="home">返回首页</button></div></div>`;
       setActiveNav("practice");
       return;
     }
@@ -172,7 +172,7 @@
     }).join("");
     const source = SOURCES[q.sourceKey] ?? SOURCES.questionBank;
     root.innerHTML = `
-      <div class="page-head"><div><p class="eyebrow">背题模式</p><h1>${escapeHtml(q.topic)}</h1></div><span class="date-chip">${state.practiceIndex + 1} / ${state.practiceIds.length}</span></div>
+      <div class="page-head"><div><p class="eyebrow">背题模式</p><h1>${escapeHtml(q.topic)}</h1></div><div class="practice-head-actions"><span class="date-chip">${state.practiceIndex + 1} / ${state.practiceIds.length}</span><button class="reset-practice-button" data-action="confirm-reset-practice">清除背题进度</button></div></div>
       <section class="practice-layout">
         <article class="card question-card">
           <div class="question-meta"><div class="tag-row"><span class="tag">${q.type}</span><span class="tag">${q.topic}</span></div><button class="favorite-button" data-action="toggle-favorite">${state.favorites.has(q.id) ? "★ 已收藏" : "☆ 收藏"}</button></div>
@@ -434,6 +434,31 @@
     modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal wide-modal" role="dialog" aria-modal="true"><div class="modal-head"><div><p class="eyebrow">第 ${q.id} 题解析</p><h2>${escapeHtml(q.question)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">×</button></div><div class="answer-callout">正确答案：${answerLabel}（${escapeHtml(q.options[q.answer])}）</div><h3>解析</h3><p>${escapeHtml(q.explanation)}</p><details class="source-details"><summary>查看依据来源</summary><span>${q.explanationOrigin} · ${source.url ? `<a href="${source.url}" target="_blank" rel="noreferrer">${escapeHtml(source.title)} ↗</a>` : escapeHtml(source.title)}${q.standardWarning ? `<br>${escapeHtml(q.standardWarning)}` : ""}</span></details></section></div>`;
   }
 
+  function confirmResetPracticeProgress() {
+    modalRoot.innerHTML = `<div class="modal-backdrop"><section class="modal compact-modal" role="dialog" aria-modal="true" aria-labelledby="resetPracticeTitle"><h2 id="resetPracticeTitle">清除背题进度？</h2><p class="subtle">将清除全部背题模式的已作答、已背和已掌握记录，并从当前题组第一题重新开始。错题、收藏和模拟考试历史会保留。</p><div class="modal-actions"><button class="ghost-button light-button" data-action="close-modal">取消</button><button class="danger-button" data-action="reset-practice-progress">确认清除</button></div></section></div>`;
+  }
+
+  function resetPracticeProgress() {
+    const practiceDoneIds = new Set([...state.studied, ...Object.keys(state.answers).map(Number)]);
+    practiceDoneIds.forEach((id) => {
+      if (!state.wrong.has(id)) state.seen.delete(id);
+    });
+    state.answers = {};
+    state.studied.clear();
+    state.mastered.clear();
+    if (!state.practiceIds.length) {
+      state.practiceIds = questions.map((q) => q.id);
+      state.practiceScope = "all";
+    }
+    state.practiceIndex = 0;
+    state.selected = null;
+    state.revealed = false;
+    save();
+    closeModal();
+    renderPractice();
+    showToast("背题进度已清除，已重新开始");
+  }
+
   function closeModal() { modalRoot.innerHTML = ""; }
 
   function selectPracticeGroup(scope, topic, order) {
@@ -453,6 +478,8 @@
     if (action === "start-practice") openPracticeSetup();
     if (action === "start-all-practice") startPractice();
     if (action === "open-practice-setup") openPracticeSetup();
+    if (action === "confirm-reset-practice") confirmResetPracticeProgress();
+    if (action === "reset-practice-progress") resetPracticeProgress();
     if (action === "confirm-practice-setup") selectPracticeGroup(document.querySelector("#practiceScope").value, document.querySelector("#practiceTopic").value, document.querySelector("#practiceOrder").value);
     if (target.dataset.answer) { state.selected = target.dataset.answer; renderPractice(); }
     if (action === "reveal-answer") {
